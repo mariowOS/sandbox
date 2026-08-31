@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sandbox VM</title>
+  <link rel="stylesheet" href="/desktop/assets/material-you.css">
+  <script src="/desktop/assets/monet-engine.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: var(--md-sys-color-background);
+      color: var(--md-sys-color-on-background);
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Sidebar Controls */
+    .sidebar {
+      width: 320px;
+      background: var(--md-sys-color-surface-container);
+      border-right: 1px solid var(--md-sys-color-outline-variant);
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      color: var(--md-sys-color-primary);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .status-card {
+      background: var(--md-sys-color-surface);
+      padding: 16px;
+      border-radius: 12px;
+      border: 1px solid var(--md-sys-color-outline-variant);
+    }
+    
+    .status-indicator {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: red;
+      margin-right: 8px;
+    }
+    .status-indicator.running { background: #4caf50; }
+
+    .control-group {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .btn {
+      padding: 12px 16px;
+      border-radius: 20px;
+      border: none;
+      font-weight: bold;
+      cursor: pointer;
+      text-align: center;
+      transition: opacity 0.2s;
+    }
+    .btn:active { opacity: 0.8; }
+    
+    .btn-primary {
+      background: var(--md-sys-color-primary);
+      color: var(--md-sys-color-on-primary);
+    }
+    
+    .btn-secondary {
+      background: var(--md-sys-color-secondary-container);
+      color: var(--md-sys-color-on-secondary-container);
+    }
+    
+    .btn-danger {
+      background: var(--md-sys-color-error);
+      color: var(--md-sys-color-on-error);
+    }
+
+    input[type="file"] {
+      display: none;
+    }
+
+    .upload-label {
+      display: block;
+      padding: 16px;
+      border: 2px dashed var(--md-sys-color-primary);
+      border-radius: 12px;
+      text-align: center;
+      cursor: pointer;
+      color: var(--md-sys-color-primary);
+      font-weight: 500;
+    }
+
+    /* VM View Area */
+    .vm-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: #000;
+      position: relative;
+    }
+    
+    .vm-header {
+      background: #111;
+      color: #fff;
+      padding: 8px 16px;
+      font-size: 12px;
+      font-family: monospace;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    iframe {
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      border: none;
+      background: #000;
+    }
+
+    .overlay {
+      position: absolute;
+      top: 33px; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.8);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      font-family: monospace;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <h1>📦 Sandbox VM</h1>
+    
+    <div class="status-card">
+      <div style="font-weight: 500; margin-bottom: 8px;">Virtual Machine Status</div>
+      <div style="display: flex; align-items: center;">
+        <span class="status-indicator" id="status-dot"></span>
+        <span id="status-text">Stopped</span>
+      </div>
+    </div>
+
+    <div class="control-group">
+      <label class="upload-label" id="uploadLabel">
+        Select mariowOS .ZIP
+        <input type="file" id="zipInput" accept=".zip">
+      </label>
+      
+      <button class="btn btn-primary" id="btn-boot" style="display:none;" onclick="bootVM()">▶ Boot VM</button>
+      <button class="btn btn-danger" id="btn-stop" style="display:none;" onclick="stopVM()">⏹ Shut Down</button>
+      <button class="btn btn-secondary" id="btn-open-ext" style="display:none;" onclick="openExternal()">🌐 Open in Browser</button>
+    </div>
+  </div>
+
+  <!-- VM Area -->
+  <div class="vm-container">
+    <div class="vm-header">
+      <span>GUEST: mariowOS (Port 3001)</span>
+      <span id="vm-header-status">NO SIGNAL</span>
+    </div>
+    
+    <div class="overlay" id="vm-overlay">
+      <h2>SANDBOX OFF</h2>
+      <p style="color:#aaa;">Upload a mariowOS release zip and click Boot.</p>
+    </div>
+
+    <iframe id="vm-frame"></iframe>
+  </div>
+
+  <script>
+    const statusDot = document.getElementById('status-dot');
+    const statusText = document.getElementById('status-text');
+    const btnBoot = document.getElementById('btn-boot');
+    const btnStop = document.getElementById('btn-stop');
+    const btnExt = document.getElementById('btn-open-ext');
+    const vmFrame = document.getElementById('vm-frame');
+    const vmOverlay = document.getElementById('vm-overlay');
+    const headerStatus = document.getElementById('vm-header-status');
+    const zipInput = document.getElementById('zipInput');
+    const uploadLabel = document.getElementById('uploadLabel');
+
+    let isRunning = false;
+
+    // Check status on load
+    function fetchStatus() {
+      fetch('/api/sandbox/status')
+        .then(res => res.json())
+        .then(data => {
+          updateUI(data.running);
+        });
+    }
+
+    function updateUI(running) {
+      isRunning = running;
+      if (running) {
+        statusDot.classList.add('running');
+        statusText.innerText = "Running (Port 3001)";
+        btnBoot.style.display = "none";
+        btnStop.style.display = "block";
+        btnExt.style.display = "block";
+        vmOverlay.style.display = "none";
+        headerStatus.innerText = "CONNECTED";
+        
+        // Only reload frame if it's empty
+        if (!vmFrame.src) {
+           vmFrame.src = "http://localhost:3001";
+        }
+      } else {
+        statusDot.classList.remove('running');
+        statusText.innerText = "Stopped";
+        btnBoot.style.display = "block";
+        btnStop.style.display = "none";
+        btnExt.style.display = "none";
+        vmOverlay.style.display = "flex";
+        vmFrame.src = "";
+        headerStatus.innerText = "NO SIGNAL";
+        
+        vmOverlay.innerHTML = `<h2>SANDBOX OFF</h2><p style="color:#aaa;">Ready to boot.</p>`;
+      }
+    }
+
+    // Handle File Upload
+    zipInput.addEventListener('change', (e) => {
+      if (!e.target.files.length) return;
+      const file = e.target.files[0];
+      
+      const formData = new FormData();
+      formData.append('vmZip', file);
+      
+      uploadLabel.innerText = "Extracting virtual disk...";
+      uploadLabel.style.pointerEvents = "none";
+      
+      fetch('/api/sandbox/upload', {
+        method: 'POST',
+        body: formData
+      })
+      .then(res => res.json())
+      .then(data => {
+        uploadLabel.innerText = "Select mariowOS .ZIP";
+        uploadLabel.style.pointerEvents = "auto";
+        if (data.success) {
+          alert("Virtual disk prepared successfully!");
+          btnBoot.style.display = "block"; // Show boot button
+        } else {
+          alert("Error: " + data.error);
+        }
+      })
+      .catch(err => {
+        uploadLabel.innerText = "Upload Failed";
+        uploadLabel.style.pointerEvents = "auto";
+      });
+    });
+
+    // Boot VM
+    function bootVM() {
+      vmOverlay.innerHTML = `<h2>BOOTING...</h2><p style="color:#aaa;">Starting server.js</p>`;
+      fetch('/api/sandbox/start', { method: 'POST' })
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            updateUI(true);
+          } else {
+            alert(data.error);
+            updateUI(false);
+          }
+        });
+    }
+
+    // Stop VM
+    function stopVM() {
+      fetch('/api/sandbox/stop', { method: 'POST' })
+        .then(res => res.json())
+        .then(data => {
+          updateUI(false);
+        });
+    }
+
+    function openExternal() {
+      window.open('http://localhost:3001', '_blank');
+    }
+
+    // Init
+    fetchStatus();
+    
+    // Poll status every 5s just in case it crashes
+    setInterval(fetchStatus, 5000);
+  </script>
+</body>
+</html>
